@@ -7,7 +7,7 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from torchvision import models
-from PIL import Image
+
 
 class ImagenetteDataset(Dataset):
     def __init__(self, X, y, transforms):
@@ -33,14 +33,14 @@ def one_hot(y: np.ndarray, n_classes: int) -> np.ndarray:
 
 if __name__ == '__main__':
 
-    use_gpu = torch.cuda.is_available()
-    batch_size = 64
-    test_size = 0.05
-    image_size = 160
-    out_features = 10
-    lr = 0.001
-    epochs = 100
-    pretrained = False
+    use_gpu: bool = torch.cuda.is_available()
+    batch_size:int = 32
+    test_size:float = 0.05
+    image_size:int = 160
+    out_features:int = 10
+    lr:float = 0.001
+    epochs:int = 80
+    pretrained:bool = False  # using pretraining helps even more
 
     X = np.load('X_train.npy')
     y = np.load('y_train.npy')
@@ -56,18 +56,23 @@ if __name__ == '__main__':
         transforms.RandomResizedCrop(size=image_size),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((110/255,117/255,118/255),(76/255,71/255,72/255))
+        transforms.Normalize((110 / 255, 117 / 255, 118 / 255), (76 / 255, 71 / 255, 72 / 255))
     ])
 
-    transforms_test = transforms.Compose([transforms.ToPILImage(),transforms.ToTensor(), transforms.Normalize((110/255,117/255,118/255),(76/255,71/255,72/255))])
+    transforms_test = transforms.Compose(
+        [transforms.ToPILImage(), transforms.ToTensor(), transforms.Normalize((110 / 255, 117 / 255, 118 / 255), (76 / 255, 71 / 255, 72 / 255))])
 
     train_dataset = ImagenetteDataset(X_train, y_train, transforms_train)
     test_dataset = ImagenetteDataset(X_test, y_test, transforms_test)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True,num_workers=2)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=2)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
 
-    model = models.resnet50(pretrained=pretrained)
-    model.fc = nn.Linear(in_features=2048, out_features=out_features)  # change for imagenette
+    model = models.resnet34(pretrained=pretrained)
+    model.fc = nn.Linear(in_features=512, out_features=out_features)
+
+    if os.path.exists('model_weights.pt'):
+        print('Loaded Model Weights')
+        model.load_state_dict(torch.load('model_weights.pt'))
 
     if use_gpu:
         model.cuda()
@@ -75,11 +80,11 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_function = nn.CrossEntropyLoss()
 
+    best_accuracy: float = 0.0
     for epoch in range(epochs):
-        global_step = 0
-        current_loss = 0
-        correct_train_preds = 0.0
-        total_train_preds = 0.0
+        train_loss: float = 0.0
+        correct_train_preds: float = 0.0
+        total_train_preds: float = 0.0
         for idx, batch_data in enumerate(train_dataloader):
             batch_x, batch_y = batch_data
 
@@ -93,24 +98,16 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
 
-            current_loss += loss.item()
+            train_loss += loss.item()
 
             total_train_preds += batch_y.shape[0]
             correct_train_preds += torch.sum(torch.argmax(predictions, dim=1) == batch_y).item()
 
-            global_step += 1
-            if global_step % 80 == 0:
-                print('Epoch: {}, global_step: {}, current_loss: {}, accuracy: {}'.format(epoch, global_step, current_loss,
-                                                                                          correct_train_preds / total_train_preds))
-                current_loss = 0
-                correct_train_preds = 0.0
-                total_train_preds = 0.0
-
         model.eval()
 
-        testing_loss = 0
-        correct_test_preds = 0.0
-        total_test_preds = 0.0
+        testing_loss: float = 0.0
+        correct_test_preds: float = 0.0
+        total_test_preds: float = 0.0
         for batch_data in test_dataloader:
             batch_x, batch_y = batch_data
 
@@ -126,6 +123,15 @@ if __name__ == '__main__':
 
             testing_loss += loss.item()
 
-        print('Testing Set - Epoch: {}, loss: {}, accuracy: {}'.format(epoch, testing_loss, correct_test_preds / total_test_preds))
+        test_accuracy = correct_test_preds / total_test_preds
+        print('Epoch: {},training_loss: {:.2f},training_accuracy: {:.2f},testing_loss: {:.2f},testing_accuracy: {:.2f}'.format(epoch, train_loss,
+                                                                                                                               correct_train_preds / total_train_preds,
+                                                                                                                               testing_loss,
+                                                                                                                               test_accuracy))
+
+        if test_accuracy > best_accuracy:
+            print('Saving model')
+            best_accuracy = test_accuracy
+            torch.save(model.state_dict(), 'model_weights.pt')
 
         model.train()
